@@ -50,14 +50,12 @@ import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NonEmpty
 import Data.Maybe (mapMaybe)
 import Data.Text (Text, unpack)
-import Shelly ((<.>), fromText)
+import Shelly (fromText, (<.>))
 import qualified Shelly
 import Shelly.Lifted (MonadSh, liftSh, rm_rf, writefile)
 import Verismith.Internal
 import Verismith.Result
-import Verismith.Tool
-import Verismith.Tool.Icarus
-import Verismith.Tool.Identity
+import Verismith.Tool (SynthTool (..), defaultIcarus, defaultIdentity, runSimIc, runSynth, runEquiv)
 import Verismith.Tool.Internal
 import Verismith.Verilog
 import Verismith.Verilog.AST
@@ -511,19 +509,19 @@ allExprIds m =
         . concatMap (toIdsConst . fromRange)
         $ m
           ^.. modItems
-          . traverse
-          . declPort
-          . portSize
+            . traverse
+            . declPort
+            . portSize
     modDeclIds = toIdsConst $ m ^.. modItems . traverse . declVal . _Just
     paramIds =
       toIdsConst $
         (m ^.. modItems . traverse . paramDecl . traverse . paramValue)
           <> ( m
                  ^.. modItems
-                 . traverse
-                 . localParamDecl
-                 . traverse
-                 . localParamValue
+                   . traverse
+                   . localParamDecl
+                   . traverse
+                   . localParamValue
              )
 
 isUsedDecl :: [Identifier] -> (ModItem ReduceAnn) -> Bool
@@ -583,12 +581,13 @@ removeDecl src = foldr fix removed allMods
     removeDecl' t src' =
       src'
         & ( \a ->
-              a & aModule t . modItems
-                %~ filter
-                  (isUsedDecl (used <> findActiveWires t a))
+              a
+                & aModule t . modItems
+                  %~ filter
+                    (isUsedDecl (used <> findActiveWires t a))
           )
-        . (aModule t . modParams %~ filter (isUsedParam used))
-        . (aModule t . modInPorts %~ filter (isUsedPort used))
+          . (aModule t . modParams %~ filter (isUsedParam used))
+          . (aModule t . modInPorts %~ filter (isUsedPort used))
       where
         used = nub $ allExprIds (src' ^. aModule t)
     allMods = src ^.. infoSrc . _Wrapped . traverse . modId
@@ -614,7 +613,9 @@ reduce_ out eval title tag untag repl bot usrc = do
   writefile out $ genSource src
   liftSh
     . Shelly.echo
-    $ "Reducing " <> title <> " (modules: "
+    $ "Reducing "
+      <> title
+      <> " (modules: "
       <> showT (length . getVerilog $ _infoSrc src)
       <> ", module items: "
       <> showT (length (src ^.. infoSrc . _Wrapped . traverse . modItems . traverse))
@@ -699,11 +700,11 @@ reduceWithScript top script file = do
 
 -- | Reduce a '(SourceInfo ReduceAnn)' using two 'Synthesiser' that are passed to it.
 reduceSynth ::
-  (Synthesiser a, Synthesiser b, MonadSh m) =>
+  MonadSh m =>
   Maybe Text ->
   Shelly.FilePath ->
-  a ->
-  b ->
+  SynthTool ->
+  SynthTool ->
   SourceInfo () ->
   m (SourceInfo ())
 reduceSynth mt datadir a b src = do
@@ -724,10 +725,10 @@ reduceSynth mt datadir a b src = do
       return $ case r of
         Fail (EquivFail _) -> True
         _ -> False
-    prefix = "reduce_" <> toText a <> "_" <> toText b
+    prefix = "reduce_" <> synthDesc a <> "_" <> synthDesc b
 
-reduceSynthesis :: (Synthesiser a, MonadSh m) => a -> SourceInfo () -> m (SourceInfo ())
-reduceSynthesis a = reduce (fromText $ "reduce_" <> toText a <> ".v") synth
+reduceSynthesis :: MonadSh m => SynthTool -> SourceInfo () -> m (SourceInfo ())
+reduceSynthesis a = reduce (fromText $ "reduce_" <> synthDesc a <> ".v") synth
   where
     synth src = liftSh $ do
       r <- runResultT $ runSynth a src
@@ -737,23 +738,21 @@ reduceSynthesis a = reduce (fromText $ "reduce_" <> toText a <> ".v") synth
 
 runInTmp :: Shelly.Sh a -> Shelly.Sh a
 runInTmp a =
-  Shelly.withTmpDir $
-    ( \f -> do
-        dir <- Shelly.pwd
-        Shelly.cd f
-        r <- a
-        Shelly.cd dir
-        return r
-    )
+  Shelly.withTmpDir $ \f -> do
+    dir <- Shelly.pwd
+    Shelly.cd f
+    r <- a
+    Shelly.cd dir
+    return r
 
 reduceSimIc ::
-  (Synthesiser a, MonadSh m) =>
+  MonadSh m =>
   Shelly.FilePath ->
   [ByteString] ->
-  a ->
+  SynthTool ->
   SourceInfo () ->
   m (SourceInfo ())
-reduceSimIc fp bs a = reduce (fromText $ "reduce_sim_" <> toText a <> ".v") synth
+reduceSimIc fp bs a = reduce (fromText $ "reduce_sim_" <> synthDesc a <> ".v") synth
   where
     synth src = liftSh . runInTmp $ do
       r <- runResultT $ do

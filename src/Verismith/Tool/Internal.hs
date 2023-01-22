@@ -13,11 +13,7 @@
 module Verismith.Tool.Internal
   ( ResultSh,
     resultSh,
-    Tool (..),
-    Simulator (..),
-    Synthesiser (..),
     Failed (..),
-    renameSource,
     checkPresent,
     checkPresentModules,
     replace,
@@ -57,28 +53,6 @@ import Verismith.Result
 import Verismith.Verilog.AST
 import Prelude hiding (FilePath)
 
--- | Tool class.
-class Tool a where
-  toText :: a -> Text
-
--- | Simulation type class.
-class Tool a => Simulator a where
-  runSim ::
-    Show ann =>
-    -- | Simulator instance
-    a ->
-    -- | Run information
-    SourceInfo ann ->
-    -- | Inputs to simulate
-    [ByteString] ->
-    -- | Returns the value of the hash at the output of the testbench.
-    ResultSh ByteString
-  runSimWithFile ::
-    a ->
-    FilePath ->
-    [ByteString] ->
-    ResultSh ByteString
-
 data Failed
   = EmptyFail
   | EquivFail (Maybe CounterEg)
@@ -102,23 +76,6 @@ instance Semigroup Failed where
 
 instance Monoid Failed where
   mempty = EmptyFail
-
--- | Synthesiser type class.
-class Tool a => Synthesiser a where
-  runSynth ::
-    Show ann =>
-    -- | Synthesiser tool instance
-    a ->
-    -- | Run information
-    SourceInfo ann ->
-    -- | does not return any values
-    ResultSh ()
-  synthOutput :: a -> FilePath
-  setSynthOutput :: a -> FilePath -> a
-
-renameSource :: (Synthesiser a) => a -> SourceInfo ann -> SourceInfo ann
-renameSource a src =
-  src & infoSrc . _Wrapped . traverse . modId . _Wrapped %~ (<> toText a)
 
 -- | Type synonym for a 'ResultT' that will be used throughout 'Verismith'. This
 -- has instances for 'MonadSh' and 'MonadIO' if the 'Monad' it is parametrised

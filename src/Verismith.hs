@@ -239,7 +239,7 @@ handleOpts (ShuffleOpt f t o nshuffle nrename noequiv equivdir checker) = do
     file = T.unpack . toTextIgnore $ f
     fn1 = "rtl1.v"
     fn2 = "rtl2.v"
-    mkid f = Verismith.Tool.Identity "" (fromText f)
+    mkid f = SynthTool IdentitySynth Nothing "" (fromText f)
 handleOpts (Reduce f t _ ls' False) = do
   src <- parseSourceInfoFile t (toTextIgnore f)
   datadir <- getDataDir
@@ -315,7 +315,7 @@ handleOpts (Equiv o v1 v2 top checker) = do
   where
     fn1 = "rtl1.v"
     fn2 = "rtl2.v"
-    mkid f = Verismith.Tool.Identity "" (fromText f)
+    mkid f = SynthTool IdentitySynth Nothing "" (fromText f)
 
 defaultMain :: IO ()
 defaultMain = do

@@ -12,11 +12,9 @@
 --
 -- Generate a report from a fuzz run.
 module Verismith.Report
-  ( SynthTool (..),
-    SynthStatus (..),
+  ( SynthStatus (..),
     SynthResult (..),
     SimResult (..),
-    SimTool (..),
     FuzzReport (..),
     printResultReport,
     printSummary,
@@ -28,20 +26,13 @@ module Verismith.Report
     fileLines,
     reducTime,
     synthTime,
-    defaultIcarusSim,
-    defaultVivadoSynth,
-    defaultYosysSynth,
-    defaultXSTSynth,
-    defaultQuartusSynth,
-    defaultQuartusLightSynth,
-    defaultIdentitySynth,
     descriptionToSim,
     descriptionToSynth,
   )
 where
 
 import Control.DeepSeq (NFData, rnf)
-import Control.Lens hiding ((<.>), Identity)
+import Control.Lens hiding (Identity, (<.>))
 import Data.Bifunctor (bimap)
 import Data.ByteString (ByteString)
 import Data.Maybe (fromMaybe)
@@ -51,13 +42,13 @@ import qualified Data.Text as T
 import Data.Text.Lazy (toStrict)
 import Data.Time
 import Shelly
-  ( (<.>),
-    (</>),
-    FilePath,
+  ( FilePath,
     fromText,
     toTextIgnore,
+    (<.>),
+    (</>),
   )
-import Text.Blaze.Html ((!), Html)
+import Text.Blaze.Html (Html, (!))
 import Text.Blaze.Html.Renderer.Text (renderHtml)
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
@@ -73,98 +64,6 @@ type UResult = Result Failed ()
 
 -- | Commont type alias for simulation results
 type BResult = Result Failed ByteString
-
-data SynthTool
-  = XSTSynth {-# UNPACK #-} !XST
-  | VivadoSynth {-# UNPACK #-} !Vivado
-  | YosysSynth {-# UNPACK #-} !Yosys
-  | QuartusSynth {-# UNPACK #-} !Quartus
-  | QuartusLightSynth {-# UNPACK #-} !QuartusLight
-  | IdentitySynth {-# UNPACK #-} !Identity
-  deriving (Eq)
-
-instance NFData SynthTool where
-  rnf (XSTSynth a) = rnf a
-  rnf (VivadoSynth a) = rnf a
-  rnf (YosysSynth a) = rnf a
-  rnf (QuartusSynth a) = rnf a
-  rnf (QuartusLightSynth a) = rnf a
-  rnf (IdentitySynth a) = rnf a
-
-instance Show SynthTool where
-  show (XSTSynth xst) = show xst
-  show (VivadoSynth vivado) = show vivado
-  show (YosysSynth yosys) = show yosys
-  show (QuartusSynth quartus) = show quartus
-  show (QuartusLightSynth quartus) = show quartus
-  show (IdentitySynth identity) = show identity
-
-instance Tool SynthTool where
-  toText (XSTSynth xst) = toText xst
-  toText (VivadoSynth vivado) = toText vivado
-  toText (YosysSynth yosys) = toText yosys
-  toText (QuartusSynth quartus) = toText quartus
-  toText (QuartusLightSynth quartus) = toText quartus
-  toText (IdentitySynth identity) = toText identity
-
-instance Synthesiser SynthTool where
-  runSynth (XSTSynth xst) = runSynth xst
-  runSynth (VivadoSynth vivado) = runSynth vivado
-  runSynth (YosysSynth yosys) = runSynth yosys
-  runSynth (QuartusSynth quartus) = runSynth quartus
-  runSynth (QuartusLightSynth quartus) = runSynth quartus
-  runSynth (IdentitySynth identity) = runSynth identity
-
-  synthOutput (XSTSynth xst) = synthOutput xst
-  synthOutput (VivadoSynth vivado) = synthOutput vivado
-  synthOutput (YosysSynth yosys) = synthOutput yosys
-  synthOutput (QuartusSynth quartus) = synthOutput quartus
-  synthOutput (QuartusLightSynth quartus) = synthOutput quartus
-  synthOutput (IdentitySynth identity) = synthOutput identity
-
-  setSynthOutput (YosysSynth yosys) = YosysSynth . setSynthOutput yosys
-  setSynthOutput (XSTSynth xst) = XSTSynth . setSynthOutput xst
-  setSynthOutput (VivadoSynth vivado) = VivadoSynth . setSynthOutput vivado
-  setSynthOutput (QuartusSynth quartus) = QuartusSynth . setSynthOutput quartus
-  setSynthOutput (QuartusLightSynth quartus) = QuartusLightSynth . setSynthOutput quartus
-  setSynthOutput (IdentitySynth identity) = IdentitySynth . setSynthOutput identity
-
-defaultYosysSynth :: SynthTool
-defaultYosysSynth = YosysSynth defaultYosys
-
-defaultQuartusSynth :: SynthTool
-defaultQuartusSynth = QuartusSynth defaultQuartus
-
-defaultQuartusLightSynth :: SynthTool
-defaultQuartusLightSynth = QuartusLightSynth defaultQuartusLight
-
-defaultVivadoSynth :: SynthTool
-defaultVivadoSynth = VivadoSynth defaultVivado
-
-defaultXSTSynth :: SynthTool
-defaultXSTSynth = XSTSynth defaultXST
-
-defaultIdentitySynth :: SynthTool
-defaultIdentitySynth = IdentitySynth defaultIdentity
-
-newtype SimTool = IcarusSim Icarus
-  deriving (Eq)
-
-instance NFData SimTool where
-  rnf (IcarusSim a) = rnf a
-
-instance Tool SimTool where
-  toText (IcarusSim icarus) = toText icarus
-
-instance Simulator SimTool where
-  runSim (IcarusSim icarus) = runSim icarus
-  runSimWithFile (IcarusSim icarus) = runSimWithFile icarus
-
-instance Show SimTool where
-  show (IcarusSim icarus) = show icarus
-
-defaultIcarusSim :: SimTool
-defaultIcarusSim = IcarusSim defaultIcarus
 
 -- | The results from running a tool through a simulator. It can either fail or
 -- return a result, which is most likely a 'ByteString'.
@@ -204,61 +103,46 @@ instance Show SynthStatus where
 
 -- | The complete state that will be used during fuzzing, which contains the
 -- results from all the operations.
-data FuzzReport
-  = FuzzReport
-      { _fuzzDir :: !FilePath,
-        -- | Results of the equivalence check.
-        _synthResults :: ![SynthResult],
-        -- | Results of the simulation.
-        _simResults :: ![SimResult],
-        -- | Results of the synthesis step.
-        _synthStatus :: ![SynthStatus],
-        _fileLines :: {-# UNPACK #-} !Int,
-        _synthTime :: !NominalDiffTime,
-        _equivTime :: !NominalDiffTime,
-        _reducTime :: !NominalDiffTime
-      }
+data FuzzReport = FuzzReport
+  { _fuzzDir :: !FilePath,
+    -- | Results of the equivalence check.
+    _synthResults :: ![SynthResult],
+    -- | Results of the simulation.
+    _simResults :: ![SimResult],
+    -- | Results of the synthesis step.
+    _synthStatus :: ![SynthStatus],
+    _fileLines :: {-# UNPACK #-} !Int,
+    _synthTime :: !NominalDiffTime,
+    _equivTime :: !NominalDiffTime,
+    _reducTime :: !NominalDiffTime
+  }
   deriving (Eq, Show)
 
 $(makeLenses ''FuzzReport)
 
 descriptionToSim :: SimDescription -> SimTool
-descriptionToSim (SimDescription "icarus") = defaultIcarusSim
+descriptionToSim (SimDescription "icarus") = defaultIcarus
 descriptionToSim s =
   error $ "Could not find implementation for simulator '" <> show s <> "'"
 
 -- | Convert a description to a synthesiser.
 descriptionToSynth :: SynthDescription -> SynthTool
-descriptionToSynth (SynthDescription "yosys" bin desc out) =
-  YosysSynth
-    . Yosys (fromText <$> bin) (fromMaybe (yosysDesc defaultYosys) desc)
-    $ maybe (yosysOutput defaultYosys) fromText out
-descriptionToSynth (SynthDescription "vivado" bin desc out) =
-  VivadoSynth
-    . Vivado (fromText <$> bin) (fromMaybe (vivadoDesc defaultVivado) desc)
-    $ maybe (vivadoOutput defaultVivado) fromText out
-descriptionToSynth (SynthDescription "xst" bin desc out) =
-  XSTSynth
-    . XST (fromText <$> bin) (fromMaybe (xstDesc defaultXST) desc)
-    $ maybe (xstOutput defaultXST) fromText out
-descriptionToSynth (SynthDescription "quartus" bin desc out) =
-  QuartusSynth
-    . Quartus
-      (fromText <$> bin)
-      (fromMaybe (quartusDesc defaultQuartus) desc)
-    $ maybe (quartusOutput defaultQuartus) fromText out
-descriptionToSynth (SynthDescription "quartuslight" bin desc out) =
-  QuartusLightSynth
-    . QuartusLight
-      (fromText <$> bin)
-      (fromMaybe (quartusDesc defaultQuartus) desc)
-    $ maybe (quartusOutput defaultQuartus) fromText out
-descriptionToSynth (SynthDescription "identity" _ desc out) =
-  IdentitySynth
-    . Identity (fromMaybe (identityDesc defaultIdentity) desc)
-    $ maybe (identityOutput defaultIdentity) fromText out
-descriptionToSynth s =
-  error $ "Could not find implementation for synthesiser '" <> show s <> "'"
+descriptionToSynth (SynthDescription name bin desc out) =
+  defaultTool
+    { synthOutput = maybe (synthOutput defaultTool) fromText out,
+      Verismith.Tool.synthBin = fromText <$> bin,
+      Verismith.Tool.synthDesc = fromMaybe (Verismith.Tool.synthDesc defaultTool) desc
+    }
+  where
+    defaultTool :: SynthTool
+    defaultTool = case name of
+      "vivado" -> defaultVivado
+      "yosys" -> defaultYosys
+      "xst" -> defaultXST
+      "quartus" -> defaultQuartus
+      "quartusLight" -> defaultQuartusLight
+      "identity" -> defaultIdentity
+      _ -> error $ "Could not find implementation for synthesiser '" <> show name <> "'"
 
 status :: Result Failed () -> Html
 status (Pass _) = H.td ! A.class_ "is-success" $ "Passed"
@@ -271,14 +155,14 @@ status (Fail TimeoutError) = H.td ! A.class_ "is-warning" $ "Time out"
 
 synthStatusHtml :: SynthStatus -> Html
 synthStatusHtml (SynthStatus synth res diff) = H.tr $ do
-  H.td . H.toHtml $ toText synth
+  H.td . H.toHtml $ Verismith.Tool.synthDesc synth
   status res
   H.td . H.toHtml $ showT diff
 
 synthResultHtml :: SynthResult -> Html
 synthResultHtml (SynthResult synth1 synth2 res diff) = H.tr $ do
-  H.td . H.toHtml $ toText synth1
-  H.td . H.toHtml $ toText synth2
+  H.td . H.toHtml $ Verismith.Tool.synthDesc synth1
+  H.td . H.toHtml $ Verismith.Tool.synthDesc synth2
   status res
   H.td . H.toHtml $ showT diff
 
@@ -399,7 +283,7 @@ summary name fuzz = H.docTypeHtml $ do
                   . sum
                   $ fuzz
                     ^.. traverse
-                    . fileLines,
+                      . fileLines,
                 sumUp synthTime,
                 sumUp equivTime,
                 sumUp reducTime

@@ -52,15 +52,7 @@ library
                  , Verismith.Result
                  , Verismith.Shuffle
                  , Verismith.Tool
-                 , Verismith.Tool.Icarus
-                 , Verismith.Tool.Identity
                  , Verismith.Tool.Internal
-                 , Verismith.Tool.Quartus
-                 , Verismith.Tool.QuartusLight
-                 , Verismith.Tool.Template
-                 , Verismith.Tool.Vivado
-                 , Verismith.Tool.XST
-                 , Verismith.Tool.Yosys
                  , Verismith.Utils
                  , Verismith.Verilog
                  , Verismith.Verilog.AST

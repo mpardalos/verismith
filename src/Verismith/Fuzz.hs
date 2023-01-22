@@ -51,35 +51,33 @@ import qualified Hedgehog.Internal.Tree as Hog
 import Shelly hiding (get, sub)
 import Shelly.Lifted (MonadSh, liftSh, sub)
 import System.FilePath.Posix (takeBaseName)
-import Verismith.Config
+import Verismith.Config hiding (synthDesc)
 import Verismith.CounterEg (CounterEg (..))
+import Verismith.EMI
 import Verismith.Internal
 import Verismith.Reduce
 import Verismith.Report
 import Verismith.Result
-import Verismith.Tool.Icarus
+import Verismith.Tool
 import Verismith.Tool.Internal
-import Verismith.Tool.Yosys
 import Verismith.Utils (generateByteString)
 import Verismith.Verilog.AST
 import Verismith.Verilog.CodeGen
-import Verismith.EMI
 import Prelude hiding (FilePath)
 
-data FuzzOpts
-  = FuzzOpts
-      { _fuzzOptsOutput :: !(Maybe FilePath),
-        _fuzzOptsForced :: !Bool,
-        _fuzzOptsKeepAll :: !Bool,
-        _fuzzOptsIterations :: {-# UNPACK #-} !Int,
-        _fuzzOptsNoSim :: !Bool,
-        _fuzzOptsNoEquiv :: !Bool,
-        _fuzzOptsNoReduction :: !Bool,
-        _fuzzOptsConfig :: {-# UNPACK #-} !Config,
-        _fuzzDataDir :: !FilePath,
-        _fuzzOptsCrossCheck :: !Bool,
-        _fuzzOptsChecker :: !(Maybe Text)
-      }
+data FuzzOpts = FuzzOpts
+  { _fuzzOptsOutput :: !(Maybe FilePath),
+    _fuzzOptsForced :: !Bool,
+    _fuzzOptsKeepAll :: !Bool,
+    _fuzzOptsIterations :: {-# UNPACK #-} !Int,
+    _fuzzOptsNoSim :: !Bool,
+    _fuzzOptsNoEquiv :: !Bool,
+    _fuzzOptsNoReduction :: !Bool,
+    _fuzzOptsConfig :: {-# UNPACK #-} !Config,
+    _fuzzDataDir :: !FilePath,
+    _fuzzOptsCrossCheck :: !Bool,
+    _fuzzOptsChecker :: !(Maybe Text)
+  }
   deriving (Show, Eq)
 
 $(makeLenses ''FuzzOpts)
@@ -100,23 +98,21 @@ defaultFuzzOpts =
       _fuzzOptsChecker = Nothing
     }
 
-data FuzzEnv
-  = FuzzEnv
-      { _getSynthesisers :: ![SynthTool],
-        _getSimulators :: ![SimTool],
-        _yosysInstance :: {-# UNPACK #-} !Yosys,
-        _fuzzEnvOpts :: {-# UNPACK #-} !FuzzOpts
-      }
+data FuzzEnv = FuzzEnv
+  { _getSynthesisers :: ![SynthTool],
+    _getSimulators :: ![SimTool],
+    _yosysInstance :: {-# UNPACK #-} !SynthTool,
+    _fuzzEnvOpts :: {-# UNPACK #-} !FuzzOpts
+  }
   deriving (Eq, Show)
 
 $(makeLenses ''FuzzEnv)
 
-data FuzzState
-  = FuzzState
-      { _fuzzSynthResults :: ![SynthResult],
-        _fuzzSimResults :: ![SimResult],
-        _fuzzSynthStatus :: ![SynthStatus]
-      }
+data FuzzState = FuzzState
+  { _fuzzSynthResults :: ![SynthResult],
+    _fuzzSimResults :: ![SimResult],
+    _fuzzSynthStatus :: ![SynthStatus]
+  }
   deriving (Eq, Show)
 
 $(makeLenses ''FuzzState)
@@ -129,21 +125,20 @@ type Fuzz m = StateT FuzzState (ReaderT FuzzEnv m)
 
 type MonadFuzz m = (MonadBaseControl IO m, MonadIO m, MonadSh m)
 
-runFuzz :: MonadIO m => FuzzOpts -> Yosys -> Fuzz Sh a -> m a
-runFuzz fo yos m = shelly $ runFuzz' fo yos m
+runFuzz :: MonadIO m => FuzzOpts -> SynthTool -> Fuzz Sh a -> m a
+runFuzz fo synth m = shelly $ runFuzz' fo synth m
 
-runFuzz' :: Monad m => FuzzOpts -> Yosys -> Fuzz m b -> m b
-runFuzz' fo yos m =
+runFuzz' :: Monad m => FuzzOpts -> SynthTool -> Fuzz m b -> m b
+runFuzz' fo synth m =
   runReaderT
     (evalStateT m (FuzzState [] [] []))
     ( FuzzEnv
         { _getSynthesisers =
-            ( force $
-                defaultIdentitySynth
-                  : (descriptionToSynth <$> conf ^. configSynthesisers)
-            ),
-          _getSimulators = (force $ descriptionToSim <$> conf ^. configSimulators),
-          _yosysInstance = yos,
+            force $
+              defaultIdentity
+                : (descriptionToSynth <$> conf ^. configSynthesisers),
+          _getSimulators = force $ descriptionToSim <$> conf ^. configSimulators,
+          _yosysInstance = synth,
           _fuzzEnvOpts = fo
         }
     )
@@ -201,8 +196,8 @@ passedFuzz (FuzzReport _ synth sim synthstat _ _ _ _) =
 synthesisers :: Monad m => Fuzz m [SynthTool]
 synthesisers = lift $ asks _getSynthesisers
 
---simulators :: (Monad m) => Fuzz () m [SimTool]
---simulators = lift $ asks getSimulators
+-- simulators :: (Monad m) => Fuzz () m [SimTool]
+-- simulators = lift $ asks getSimulators
 
 combinations :: [a] -> [b] -> [(a, b)]
 combinations l1 l2 = [(x, y) | x <- l1, y <- l2]
@@ -225,9 +220,9 @@ synthesis src = do
     .= applyList (uncurry . SynthStatus <$> synth) (fmap swap resTimes)
   liftSh $ inspect resTimes
   where
-    exec a = toolRun ("synthesis with " <> toText a) . runResultT $ do
-      liftSh . mkdir_p . fromText $ toText a
-      pop (fromText $ toText a) $ runSynth a src
+    exec a = toolRun ("synthesis with " <> synthDesc a) . runResultT $ do
+      liftSh . mkdir_p . fromText $ synthDesc a
+      pop (fromText $ synthDesc a) $ runSynth a src
 
 passedSynthesis :: MonadSh m => Fuzz m [SynthTool]
 passedSynthesis = fmap toSynth . filter passed . _fuzzSynthStatus <$> get
@@ -294,14 +289,14 @@ equivalence src = do
   let synthComb =
         if doCrossCheck
           then nubBy tupEq . filter (uncurry (/=)) $ combinations synth synth
-          else nubBy tupEq . filter (uncurry (/=)) $ (,) defaultIdentitySynth <$> synth
+          else nubBy tupEq . filter (uncurry (/=)) $ (,) defaultIdentity <$> synth
   resTimes <- liftSh $ mapM (uncurry (equiv (conf ^. configProperty . propDefaultYosys) checker datadir)) synthComb
   fuzzSynthResults .= toSynthResult synthComb resTimes
   liftSh $ inspect resTimes
   where
     tupEq (a, b) (a', b') = (a == a' && b == b') || (a == b' && b == a')
     equiv yosysloc checker datadir a b =
-      toolRun ("equivalence check for " <> toText a <> " and " <> toText b)
+      toolRun ("equivalence check for " <> synthDesc a <> " and " <> synthDesc b)
         . runResultT
         $ do
           make dir
@@ -309,13 +304,13 @@ equivalence src = do
             liftSh $ do
               cp
                 ( fromText ".."
-                    </> fromText (toText a)
+                    </> fromText (synthDesc a)
                     </> synthOutput a
                 )
                 $ synthOutput a
               cp
                 ( fromText ".."
-                    </> fromText (toText b)
+                    </> fromText (synthDesc b)
                     </> synthOutput b
                 )
                 $ synthOutput b
@@ -324,7 +319,7 @@ equivalence src = do
               maybe (return ()) (liftSh . prependToPath . fromText) yosysloc
               runEquiv checker datadir a b src
       where
-        dir = fromText $ "equiv_" <> toText a <> "_" <> toText b
+        dir = fromText $ "equiv_" <> synthDesc a <> "_" <> synthDesc b
 
 simulation :: (MonadIO m, MonadSh m, Show ann) => (SourceInfo ann) -> Fuzz m ()
 simulation src = do
@@ -332,36 +327,36 @@ simulation src = do
   synth <- passedSynthesis
   counterEgs <- failEquivWithIdentityCE
   vals <- liftIO $ generateByteString Nothing 32 20
-  ident <- liftSh $ sim datadir vals Nothing defaultIdentitySynth
+  ident <- liftSh $ sim datadir vals Nothing defaultIdentity
   resTimes <- liftSh $ mapM (sim datadir vals (justPass $ snd ident)) synth
   resTimes2 <- liftSh $ mapM (simCounterEg datadir) counterEgs
-  fuzzSimResults .= toSimResult defaultIcarusSim vals synth resTimes
+  fuzzSimResults .= toSimResult defaultIcarus vals synth resTimes
   liftSh
     . inspect
     $ (\(_, r) -> bimap show (T.unpack . T.take 10 . showBS) r)
       <$> (ident : resTimes)
   where
-    sim datadir b i a = toolRun ("simulation for " <> toText a) . runResultT $ do
+    sim datadir b i a = toolRun ("simulation for " <> synthDesc a) . runResultT $ do
       make dir
       pop dir $ do
         liftSh $ do
-          cp (fromText ".." </> fromText (toText a) </> synthOutput a) $
+          cp (fromText ".." </> fromText (synthDesc a) </> synthOutput a) $
             synthOutput a
           writefile "rtl.v" $ genSource src
         runSimIc datadir defaultIcarus a src b i
       where
-        dir = fromText $ "simulation_" <> toText a
-    simCounterEg datadir (a, Nothing) = toolRun ("counter-example simulation for " <> toText a) . return $ Fail EmptyFail
-    simCounterEg datadir (a, Just b) = toolRun ("counter-example simulation for " <> toText a) . runResultT $ do
+        dir = fromText $ "simulation_" <> synthDesc a
+    simCounterEg datadir (a, Nothing) = toolRun ("counter-example simulation for " <> synthDesc a) . return $ Fail EmptyFail
+    simCounterEg datadir (a, Just b) = toolRun ("counter-example simulation for " <> synthDesc a) . runResultT $ do
       make dir
       pop dir $ do
         liftSh $ do
-          cp (fromText ".." </> fromText (toText a) </> synthOutput a) $ synthOutput a
+          cp (fromText ".." </> fromText (synthDesc a) </> synthOutput a) $ synthOutput a
           writefile "syn_identity.v" $ genSource src
-        ident <- runSimIcEC datadir defaultIcarus defaultIdentitySynth src b Nothing
+        ident <- runSimIcEC datadir defaultIcarus defaultIdentity src b Nothing
         runSimIcEC datadir defaultIcarus a src b (Just ident)
       where
-        dir = fromText $ "countereg_sim_" <> toText a
+        dir = fromText $ "countereg_sim_" <> synthDesc a
 
 simulationEMI :: (MonadIO m, MonadSh m, Show ann) => (SourceInfo (EMIInputs ann)) -> Fuzz m ()
 simulationEMI src = do
@@ -369,37 +364,37 @@ simulationEMI src = do
   synth <- passedSynthesis
   counterEgs <- failEquivWithIdentityCE
   vals <- liftIO $ generateByteString Nothing 32 100
-  ident <- liftSh $ sim datadir vals Nothing defaultIdentitySynth
+  ident <- liftSh $ sim datadir vals Nothing defaultIdentity
   resTimes <- liftSh $ mapM (sim datadir vals (justPass $ snd ident)) synth
-  fuzzSimResults .= toSimResult defaultIcarusSim vals synth resTimes
+  fuzzSimResults .= toSimResult defaultIcarus vals synth resTimes
   liftSh
     . inspect
     $ (\(_, r) -> bimap show (T.unpack . T.take 10 . showBS) r)
       <$> (ident : resTimes)
   where
-    sim datadir b i a = toolRun ("simulation for " <> toText a) . runResultT $ do
+    sim datadir b i a = toolRun ("simulation for " <> synthDesc a) . runResultT $ do
       make dir
       pop dir $ do
         liftSh $ do
-          cp (fromText ".." </> fromText (toText a) </> synthOutput a) $
+          cp (fromText ".." </> fromText (synthDesc a) </> synthOutput a) $
             synthOutput a
           writefile "rtl.v" $ genSource src
         runSimIcEMI (getTopEMIIdent src) datadir defaultIcarus a (clearAnn src) b i
       where
-        dir = fromText $ "emi_sim_" <> toText a
+        dir = fromText $ "emi_sim_" <> synthDesc a
 
 failEquivWithIdentity :: (MonadSh m) => Fuzz m [SynthResult]
 failEquivWithIdentity = filter withIdentity . _fuzzSynthResults <$> get
   where
-    withIdentity (SynthResult (IdentitySynth _) _ (Fail (EquivFail _)) _) = True
-    withIdentity (SynthResult _ (IdentitySynth _) (Fail (EquivFail _)) _) = True
+    withIdentity (SynthResult (SynthTool IdentitySynth _ _ _) _ (Fail (EquivFail _)) _) = True
+    withIdentity (SynthResult _ (SynthTool IdentitySynth _ _ _) (Fail (EquivFail _)) _) = True
     withIdentity _ = False
 
 failEquivWithIdentityCE :: (MonadSh m) => Fuzz m [(SynthTool, Maybe CounterEg)]
 failEquivWithIdentityCE = catMaybes . fmap withIdentity . _fuzzSynthResults <$> get
   where
-    withIdentity (SynthResult (IdentitySynth _) s (Fail (EquivFail c)) _) = Just (s, c)
-    withIdentity (SynthResult s (IdentitySynth _) (Fail (EquivFail c)) _) = Just (s, c)
+    withIdentity (SynthResult (SynthTool IdentitySynth _ _ _) s (Fail (EquivFail c)) _) = Just (s, c)
+    withIdentity (SynthResult s (SynthTool IdentitySynth _ _ _) (Fail (EquivFail c)) _) = Just (s, c)
     withIdentity _ = Nothing
 
 failedSimulations :: (MonadSh m) => Fuzz m [SimResult]
@@ -429,13 +424,13 @@ reduction rsrc = do
   where
     red checker datadir (SynthResult a b _ _) = do
       r <- reduceSynth checker datadir a b src
-      writefile (fromText $ "reduce_" <> toText a <> "_" <> toText b <> ".v") $ genSource r
+      writefile (fromText $ "reduce_" <> synthDesc a <> "_" <> synthDesc b <> ".v") $ genSource r
     redSynth a = do
       r <- reduceSynthesis a src
-      writefile (fromText $ "reduce_" <> toText a <> ".v") $ genSource r
+      writefile (fromText $ "reduce_" <> synthDesc a <> ".v") $ genSource r
     redSim datadir (SimResult t _ bs _ _) = do
       r <- reduceSimIc datadir bs t src
-      writefile (fromText $ "reduce_sim_" <> toText t <> ".v") $ genSource r
+      writefile (fromText $ "reduce_sim_" <> synthDesc t <> ".v") $ genSource r
     src = clearAnn rsrc
 
 titleRun ::
@@ -516,15 +511,15 @@ fuzz gen = do
     . encodeConfig
     $ conf
       & configProperty
-      . propSeed
+        . propSeed
         ?~ seed'
   (tsynth, _) <- titleRun "Synthesis" $ synthesis src
   (tequiv, _) <-
-    if (_fuzzOptsNoEquiv opts)
+    if _fuzzOptsNoEquiv opts
       then return (0, mempty)
       else titleRun "Equivalence Check" $ equivalence src
   (_, _) <-
-    if (_fuzzOptsNoSim opts)
+    if _fuzzOptsNoSim opts
       then return (0, mempty)
       else titleRun "Simulation" $ simulation src
   fails <- failEquivWithIdentity
@@ -552,9 +547,11 @@ fuzz gen = do
           (getTime redResult)
   return report
 
-fuzzInDirG :: (MonadFuzz m, Ord ann, Show ann) =>
+fuzzInDirG ::
+  (MonadFuzz m, Ord ann, Show ann) =>
   (Gen (SourceInfo ann) -> Fuzz m FuzzReport) ->
-  Gen (SourceInfo ann) -> Fuzz m FuzzReport
+  Gen (SourceInfo ann) ->
+  Fuzz m FuzzReport
 fuzzInDirG f src = do
   fuzzOpts <- askOpts
   let fp = fromMaybe "fuzz" $ _fuzzOptsOutput fuzzOpts
@@ -632,11 +629,11 @@ fuzzEMI gen = do
     . encodeConfig
     $ conf
       & configProperty
-      . propSeed
+        . propSeed
         ?~ seed'
   (tsynth, _) <- titleRun "Synthesis" $ synthesis src
   (_, _) <-
-    if (_fuzzOptsNoSim opts)
+    if _fuzzOptsNoSim opts
       then return (0, mempty)
       else titleRun "Simulation" $ simulationEMI src
   fails <- failEquivWithIdentity
