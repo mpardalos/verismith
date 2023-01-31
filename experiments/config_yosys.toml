@@ -30,4 +30,3 @@
   description = "yosys"
   name = "yosys"
   output = "syn_yosys.v"
-  bin = "/home/ymh15/.local/bin"
