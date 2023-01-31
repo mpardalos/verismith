@@ -7,7 +7,7 @@
     let pkgs = nixpkgs.legacyPackages.x86_64-linux;
     in {
       devShell.x86_64-linux = pkgs.mkShell {
-        buildInputs = with pkgs; [ yosys symbiyosys verilog ];
+        buildInputs = with pkgs; [ haskell.compiler.ghc925 cabal-install yosys symbiyosys verilog ];
       };
     };
 }
